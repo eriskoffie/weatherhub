@@ -638,7 +638,7 @@ svg { width: 100%; height: auto; display: block; }
     var slider = el.querySelector('.radar-slider');
     var timeLabel = el.querySelector('.radar-time');
 
-    var map = L.map(el.querySelector('.radar-map')).setView([lat, lon], 8);
+    var map = L.map(el.querySelector('.radar-map')).setView([lat, lon], 7);
     L.marker([lat, lon]).addTo(map);
 
     // Preload every past frame; only the shown one has opacity > 0.
