@@ -247,7 +247,7 @@ svg { width: 100%; height: auto; display: block; }
     }
     text(0, 10, 'start', num(hi, '°') + ' max');
     text(0, H - 2, 'start', num(lo, '°') + ' min');
-    for (var i = 12; i < vals.length; i += 12) {
+    for (var i = 24; i < vals.length; i += 12) {
       var hour = hourly.time[start + i].slice(11, 13);
       text(xOf(i), H - 2, i === 0 ? 'start' : 'middle', hour + 'u');
     }
