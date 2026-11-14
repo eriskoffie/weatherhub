@@ -85,6 +85,44 @@ svg { width: 100%; height: auto; display: block; }
   main { grid-template-columns: 1fr 1fr; }
   #forecast, #radar { grid-column: 1 / -1; }
 }
+/* forecast module: nested sections are plain blocks, not cards */
+#forecast section { background: none; border: 0; padding: 0; border-radius: 0; }
+#forecast .current {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 20px; align-items: center;
+  padding-bottom: 16px; margin-bottom: 12px; border-bottom: 1px solid var(--border);
+}
+#forecast .icon { font-size: 3.5rem; grid-row: span 2; line-height: 1; }
+#forecast .temp { font-size: 3.5rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+#forecast .desc { color: var(--muted); font-size: 1.05rem; }
+#forecast .stats {
+  grid-column: 1 / -1; margin: 12px 0 0; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px 16px;
+}
+#forecast .stats dt { color: var(--muted); font-size: .8rem; }
+#forecast .stats dd { margin: 2px 0 0; font-weight: 600; font-size: 1.05rem; }
+#forecast .chart { color: var(--accent); margin: 8px 0 16px; }
+#forecast .chart polyline { stroke-linejoin: round; }
+#forecast .chart text { fill: var(--muted); font-family: inherit; }
+#forecast .days {
+  display: grid; grid-template-columns: repeat(7, minmax(84px, 1fr)); gap: 8px;
+  overflow-x: auto; padding-bottom: 4px;
+}
+#forecast .day {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 6px; text-align: center; min-width: 0;
+}
+#forecast .name { font-weight: 600; font-size: .9rem; }
+#forecast .dicon { font-size: 1.8rem; margin: 6px 0; line-height: 1.2; }
+#forecast .hi { font-weight: 700; font-size: 1.05rem; }
+#forecast .lo, #forecast .rain, #forecast .chance { color: var(--muted); font-size: .85rem; }
+#forecast .chance { color: var(--accent); }
+/* map: dark background instead of Leaflet's default grey */
+#radar .leaflet-container { background: #0b1020; }
+#radar .radar-controls button { flex: none; }
+@media (max-width: 560px) {
+  #forecast .current { grid-template-columns: 1fr; }
+  #forecast .icon { grid-row: auto; }
+}
 </style>
 </head>
 <body>
