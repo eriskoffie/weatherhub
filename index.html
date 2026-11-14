@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weatherhub</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --fg: #e6ebf5;
+  --muted: #8b96b0;
+  --card: #151c33;
+  --border: #252f4f;
+  --accent: #5ea8ff;
+  --ok: #3fcf8e;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fb;
+    --fg: #14192b;
+    --muted: #5a6480;
+    --card: #ffffff;
+    --border: #d8deea;
+    --accent: #1f6feb;
+    --ok: #17834f;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
+}
+header, main { padding: 0 16px; max-width: 960px; margin: 0 auto; }
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  justify-content: space-between; padding-top: 20px;
+}
+h1 { margin: 0; font-size: 1.6rem; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 10px; font-size: .85rem; color: var(--ok);
+}
+.pill::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok);
+}
+#clock { font-variant-numeric: tabular-nums; color: var(--muted); }
+.location {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin: 12px auto 4px; max-width: 960px; padding: 0 16px;
+}
+.location p { margin: 0; }
+button {
+  font: inherit; color: var(--fg); background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+main { display: grid; gap: 16px; padding-bottom: 32px; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px; min-width: 0;
+}
+section > h2 { margin: 0 0 12px; font-size: 1.1rem; }
+#forecast { overflow-x: auto; }
+#forecast ul, #air ul { list-style: none; margin: 0; padding: 0; }
+#forecast li, #air li {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+#forecast li:last-child, #air li:last-child { border-bottom: 0; }
+#air .value { font-weight: 600; color: var(--accent); }
+#radar { padding-bottom: 8px; }
+#radar .leaflet-container { width: 100%; height: 320px; border-radius: 8px; }
+svg { width: 100%; height: auto; display: block; }
+.muted { color: var(--muted); font-size: .9rem; }
+@media (min-width: 720px) {
+  main { grid-template-columns: 1fr 1fr; }
+  #forecast, #radar { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Weatherhub</h1>
+  <span class="pill">Live</span>
+  <time id="clock" aria-live="off"></time>
+</header>
+
+<div class="location">
+  <p>Locatie: <strong id="city">Amsterdam</strong> <span class="muted" id="coords">(52.37, 4.89)</span></p>
+  <button type="button" id="locate">Mijn locatie</button>
+  <span class="muted" id="locate-status"></span>
+</div>
+
+<main>
+  <section id="forecast" aria-labelledby="forecast-title">
+    <h2 id="forecast-title">7-daagse verwachting</h2>
+  </section>
+  <section id="air" aria-labelledby="air-title">
+    <h2 id="air-title">Luchtkwaliteit</h2>
+  </section>
+  <section id="radar" aria-labelledby="radar-title">
+    <h2 id="radar-title">Regen radar</h2>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// Self-test: expect JSON with keys current{time,temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,precipitation,is_day}, hourly{time,temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m}, daily{time,weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,uv_index_max,sunrise,sunset}.
+(function () {
+  'use strict';
+
+  var API = 'https://api.open-meteo.com/v1/forecast';
+  var DAYS = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+  // Arrows point in the direction the wind blows toward (N = up).
+  var ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+  var WMO = {
+    0: ['☀️', 'Helder'], 1: ['🌤️', 'Overwegend helder'],
+    2: ['⛅', 'Half bewolkt'], 3: ['☁️', 'Bewolkt'],
+    45: ['🌫️', 'Mist'], 48: ['🌫️', 'Rijpmist'],
+    51: ['🌦️', 'Lichte motregen'], 53: ['🌦️', 'Motregen'],
+    55: ['🌧️', 'Zware motregen'], 56: ['🌧️', 'IJzel'],
+    57: ['🌧️', 'Zware ijzel'], 61: ['🌦️', 'Lichte regen'],
+    63: ['🌧️', 'Regen'], 65: ['🌧️', 'Zware regen'],
+    66: ['🌧️', 'IJsregen'], 67: ['🌧️', 'Zware ijsregen'],
+    71: ['🌨️', 'Lichte sneeuw'], 73: ['🌨️', 'Sneeuw'],
+    75: ['❄️', 'Zware sneeuw'], 77: ['🌨️', 'Sneeuwkorrels'],
+    80: ['🌦️', 'Lichte buien'], 81: ['🌧️', 'Buien'],
+    82: ['⛈️', 'Zware buien'], 85: ['🌨️', 'Sneeuwbuien'],
+    86: ['❄️', 'Zware sneeuwbuien'], 95: ['⛈️', 'Onweer'],
+    96: ['⛈️', 'Onweer met hagel'], 99: ['⛈️', 'Zwaar onweer met hagel']
+  };
+
+  function wmo(code) { return WMO[code] || ['❓', 'Onbekend']; }
+
+  function num(v, unit, digits) {
+    if (v == null || isNaN(v)) return '–';
+    var f = Math.pow(10, digits || 0);
+    return (Math.round(v * f) / f) + (unit || '');
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function addStat(list, label, value) {
+    list.appendChild(el('dt', null, label));
+    list.appendChild(el('dd', null, value));
+  }
+
+  function buildUrl(lat, lon) {
+    var q = new URLSearchParams({
+      latitude: lat,
+      longitude: lon,
+      current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,precipitation,is_day',
+      hourly: 'temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m',
+      daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,uv_index_max,sunrise,sunset',
+      timezone: 'auto',
+      forecast_days: '7'
+    });
+    return API + '?' + q.toString();
+  }
+
+  // Temperature line for the next 48 hours, built from hourly data.
+  function tempChart(hourly, start) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var W = 320, H = 120, P = 18, LABEL = 14;
+    var end = Math.min(start + 48, hourly.time.length);
+    var vals = hourly.temperature_2m.slice(start, end);
+    if (vals.length < 2) return null;
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    var span = (hi - lo) || 1;
+    function xOf(i) { return P + i * (W - 2 * P) / (vals.length - 1); }
+    function yOf(v) { return P + (1 - (v - lo) / span) * (H - 2 * P - LABEL); }
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Temperatuur komende 48 uur');
+    svg.setAttribute('class', 'chart');
+
+    var pts = vals.map(function (v, i) { return xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1); });
+    var line = document.createElementNS(NS, 'polyline');
+    line.setAttribute('points', pts.join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', 'currentColor');
+    line.setAttribute('stroke-width', '2');
+    svg.appendChild(line);
+
+    function text(x, y, anchor, content) {
+      var t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', x.toFixed(1));
+      t.setAttribute('y', y);
+      t.setAttribute('text-anchor', anchor);
+      t.setAttribute('font-size', '10');
+      t.textContent = content;
+      svg.appendChild(t);
+    }
+    text(0, 10, 'start', num(hi, '°') + ' max');
+    text(0, H - 2, 'start', num(lo, '°') + ' min');
+    for (var i = 0; i < vals.length; i += 12) {
+      var hour = hourly.time[start + i].slice(11, 13);
+      text(xOf(i), H - 2, i === 0 ? 'start' : 'middle', hour + 'u');
+    }
+    return svg;
+  }
+
+  function render(root, data) {
+    var c = data.current, d = data.daily, h = data.hourly;
+    root.textContent = '';
+
+    // Current conditions
+    var now = el('section', 'current');
+    var w = wmo(c.weather_code);
+    now.appendChild(el('div', 'icon', w[0]));
+    now.appendChild(el('div', 'temp', num(c.temperature_2m, '°')));
+    now.appendChild(el('div', 'desc', w[1]));
+    var stats = el('dl', 'stats');
+    var dir = ARROWS[Math.round((((c.wind_direction_10m + 180) % 360) / 45)) % 8];
+    addStat(stats, 'Voelt als', num(c.apparent_temperature, '°'));
+    addStat(stats, 'Luchtvochtigheid', num(c.relative_humidity_2m, '%'));
+    addStat(stats, 'Wind', dir + ' ' + num(c.wind_speed_10m, ' km/u'));
+    addStat(stats, 'Neerslag nu', num(c.precipitation, ' mm', 1));
+    now.appendChild(stats);
+    root.appendChild(now);
+
+    // Next 48 hours, starting at the current hour
+    var curHour = c.time ? c.time.slice(0, 13) : '';
+    var start = h.time.findIndex(function (t) { return t.slice(0, 13) >= curHour; });
+    if (start < 0) start = 0;
+    var chart = tempChart(h, start);
+    if (chart) root.appendChild(chart);
+
+    // 7-day forecast
+    var row = el('div', 'days');
+    d.time.forEach(function (iso, i) {
+      var p = iso.split('-');
+      var date = new Date(+p[0], +p[1] - 1, +p[2]);
+      var day = el('div', 'day');
+      day.appendChild(el('div', 'name', i === 0 ? 'Vandaag' : DAYS[date.getDay()]));
+      var dw = wmo(d.weather_code[i]);
+      var icon = el('div', 'dicon', dw[0]);
+      icon.setAttribute('title', dw[1]);
+      day.appendChild(icon);
+      day.appendChild(el('div', 'hi', num(d.temperature_2m_max[i], '°')));
+      day.appendChild(el('div', 'lo', num(d.temperature_2m_min[i], '°')));
+      day.appendChild(el('div', 'rain', num(d.precipitation_sum[i], ' mm', 1)));
+      day.appendChild(el('div', 'chance', num(d.precipitation_probability_max[i], '%')));
+      row.appendChild(day);
+    });
+    root.appendChild(row);
+  }
+
+  window.renderForecast = function (lat, lon) {
+    var root = document.getElementById('forecast');
+    if (!root) return Promise.resolve();
+    if (!isFinite(lat) || !isFinite(lon)) {
+      root.textContent = 'Ongeldige locatie.';
+      return Promise.resolve();
+    }
+    root.textContent = 'Weerdata laden…';
+    return fetch(buildUrl(lat, lon))
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (data) { render(root, data); })
+      .catch(function () {
+        root.textContent = 'Weerdata kon niet worden geladen. Probeer het later opnieuw.';
+      });
+  };
+})();
+
+</script>
+<script>
+/* Weatherhub: luchtkwaliteit (European AQI). Plain browser JS, no dependencies. */
+(function () {
+  'use strict';
+
+  var API = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var HOURS = 72;
+  var W = 640, H = 230;
+  var PAD = { l: 40, r: 12, t: 14, b: 28 };
+  var LEVELS = [
+    { max: 20, label: 'Goed', color: '#2e9e5b' },
+    { max: 40, label: 'Redelijk', color: '#7cb342' },
+    { max: 60, label: 'Matig', color: '#f9a825' },
+    { max: 80, label: 'Slecht', color: '#ef6c00' },
+    { max: 100, label: 'Zeer slecht', color: '#c62828' },
+    { max: Infinity, label: 'Extreem slecht', color: '#6a1b9a' }
+  ];
+  var seq = 0; // guards against out-of-order responses
+
+  function levelFor(v) {
+    for (var i = 0; i < LEVELS.length; i++) if (v < LEVELS[i].max) return LEVELS[i];
+    return LEVELS[LEVELS.length - 1];
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function svg(tag, attrs) {
+    var n = document.createElementNS(SVG_NS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  function num(v, digits) {
+    if (v == null || !isFinite(v)) return '–';
+    return Number(v).toFixed(digits || 0);
+  }
+
+  function fmtTime(str) {
+    var d = new Date(str); // no offset in string: parsed as local time, matching timezone=auto
+    if (isNaN(d)) return str;
+    return d.toLocaleString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function ensureStyle() {
+    if (document.getElementById('air-style')) return;
+    var s = el('style');
+    s.id = 'air-style';
+    s.textContent = [
+      '.air-now{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}',
+      '.air-value{font-size:4.5rem;font-weight:700;line-height:1}',
+      '.air-label{font-size:1.25rem;font-weight:600}',
+      '.air-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:16px 0}',
+      '.air-cell{border:1px solid rgba(128,128,128,.3);border-radius:8px;padding:8px 10px}',
+      '.air-cell small{display:block;opacity:.7}',
+      '.air-cell b{font-size:1.2rem}',
+      '.air-chart{position:relative}',
+      '.air-chart svg{width:100%;height:auto;display:block;overflow:visible}',
+      '.air-tip{position:absolute;pointer-events:none;background:#222;color:#fff;padding:6px 8px;border-radius:6px;font-size:.8rem;transform:translate(-50%,-120%);white-space:nowrap;display:none}',
+      '.air-ring{transform-box:fill-box;transform-origin:center;animation:air-pulse 2s ease-out infinite}',
+      '@keyframes air-pulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(3.2);opacity:0}}',
+      '@media (prefers-reduced-motion: reduce){.air-ring{animation:none;opacity:.3}}',
+      '.air-err{color:#c62828}'
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  // Index of the hourly slot matching the "current" timestamp (compared to the hour).
+  function currentIndex(times, curTime) {
+    var key = String(curTime || '').slice(0, 13);
+    for (var i = 0; i < times.length; i++) if (times[i].slice(0, 13) === key) return i;
+    return 0;
+  }
+
+  function buildChart(wrap, times, aqi, start) {
+    var end = Math.min(start + HOURS, aqi.length, times.length);
+    var n = Math.max(0, end - start);
+    var iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b, base = H - PAD.b;
+    var max = 0, pts = [], k, v;
+    for (k = 0; k < n; k++) { v = aqi[start + k]; if (v != null && v > max) max = v; }
+    var yMax = Math.max(40, Math.ceil(max / 20) * 20);
+    function X(i) { return PAD.l + (n > 1 ? iw * i / (n - 1) : 0); }
+    function Y(val) { return PAD.t + ih * (1 - val / yMax); }
+    for (k = 0; k < n; k++) {
+      v = aqi[start + k];
+      if (v != null) pts.push({ x: X(k), y: Y(v) });
+    }
+
+    var s = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Europese AQI komende 72 uur', overflow: 'visible' });
+    var defs = svg('defs', {});
+    var grad = svg('linearGradient', { id: 'air-grad', x1: 0, y1: 0, x2: 0, y2: 1 });
+    grad.appendChild(svg('stop', { offset: '0%', 'stop-color': '#1e88e5', 'stop-opacity': '0.35' }));
+    grad.appendChild(svg('stop', { offset: '100%', 'stop-color': '#1e88e5', 'stop-opacity': '0' }));
+    defs.appendChild(grad);
+    s.appendChild(defs);
+
+    // Grid lines and y labels
+    for (var g = 0; g <= 4; g++) {
+      var gv = yMax * g / 4, gy = Y(gv);
+      s.appendChild(svg('line', { x1: PAD.l, x2: W - PAD.r, y1: gy, y2: gy, stroke: 'currentColor', 'stroke-opacity': '0.15' }));
+      var yl = svg('text', { x: PAD.l - 6, y: gy + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'currentColor', 'fill-opacity': '0.7' });
+      yl.textContent = String(Math.round(gv));
+      s.appendChild(yl);
+    }
+
+    // X labels every 6 hours
+    for (k = 0; k < n; k += 6) {
+      var xl = svg('text', { x: X(k), y: H - 8, 'text-anchor': k === 0 ? 'start' : 'middle', 'font-size': 11, fill: 'currentColor', 'fill-opacity': '0.7' });
+      xl.textContent = k === 0 ? 'Nu' : times[start + k].slice(11, 16);
+      s.appendChild(xl);
+    }
+
+    // Filled area and line
+    if (pts.length) {
+      var d = pts.map(function (p, j) { return (j ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1); }).join(' ');
+      var first = pts[0], last = pts[pts.length - 1];
+      s.appendChild(svg('path', { d: d + ' L' + last.x.toFixed(1) + ' ' + base + ' L' + first.x.toFixed(1) + ' ' + base + ' Z', fill: 'url(#air-grad)' }));
+      s.appendChild(svg('path', { d: d, fill: 'none', stroke: '#1e88e5', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+    }
+
+    // Current hour marker (pulsing ring, CSS disabled under reduced motion)
+    if (n && aqi[start] != null) {
+      var cx = X(0), cy = Y(aqi[start]);
+      s.appendChild(svg('circle', { cx: cx, cy: cy, r: 9, fill: '#1e88e5', 'fill-opacity': '0.4', 'class': 'air-ring' }));
+      s.appendChild(svg('circle', { cx: cx, cy: cy, r: 4.5, fill: '#1e88e5', stroke: '#fff', 'stroke-width': 1.5 }));
+    }
+
+    // Hover guide, marker and tooltip
+    var guide = svg('line', { y1: PAD.t, y2: base, stroke: 'currentColor', 'stroke-opacity': '0.4', 'stroke-dasharray': '3 3', visibility: 'hidden' });
+    var hover = svg('circle', { r: 4, fill: '#1e88e5', visibility: 'hidden' });
+    s.appendChild(guide);
+    s.appendChild(hover);
+    var tip = el('div', 'air-tip');
+    wrap.appendChild(s);
+    wrap.appendChild(tip);
+
+    function hide() {
+      guide.setAttribute('visibility', 'hidden');
+      hover.setAttribute('visibility', 'hidden');
+      tip.style.display = 'none';
+    }
+
+    s.addEventListener('pointermove', function (e) {
+      if (!n) return;
+      var r = s.getBoundingClientRect();
+      var vx = (e.clientX - r.left) / r.width * W;
+      var i = Math.round((vx - PAD.l) / iw * (n - 1));
+      i = Math.max(0, Math.min(n - 1, i));
+      var val = aqi[start + i], x = X(i);
+      guide.setAttribute('x1', x);
+      guide.setAttribute('x2', x);
+      guide.setAttribute('visibility', 'visible');
+      if (val != null) {
+        hover.setAttribute('cx', x);
+        hover.setAttribute('cy', Y(val));
+        hover.setAttribute('visibility', 'visible');
+      } else {
+        hover.setAttribute('visibility', 'hidden');
+      }
+      tip.textContent = '';
+      tip.appendChild(el('strong', null, val == null ? 'Geen data' : Math.round(val) + ' · ' + levelFor(val).label));
+      tip.appendChild(document.createElement('br'));
+      tip.appendChild(document.createTextNode(fmtTime(times[start + i])));
+      tip.style.left = (x / W * r.width) + 'px';
+      tip.style.top = ((val != null ? Y(val) : PAD.t) / H * r.height) + 'px';
+      tip.style.display = 'block';
+    });
+    s.addEventListener('pointerleave', hide);
+  }
+
+  function draw(box, data) {
+    var cur = data.current || {}, h = data.hourly || {};
+    var times = h.time || [];
+    var idx = currentIndex(times, cur.time);
+    var aqiNow = cur.european_aqi;
+    var lvl = aqiNow == null ? null : levelFor(aqiNow);
+
+    box.textContent = '';
+
+    var now = el('div', 'air-now');
+    var big = el('span', 'air-value', num(aqiNow));
+    big.style.color = lvl ? lvl.color : 'inherit';
+    now.appendChild(big);
+    now.appendChild(el('span', 'air-label', lvl ? lvl.label : 'Onbekend'));
+    box.appendChild(now);
+    box.appendChild(el('p', null, 'Europese luchtkwaliteitsindex (AQI), nu'));
+
+    var grid = el('div', 'air-grid');
+    [
+      ['PM2.5', cur.pm2_5],
+      ['PM10', cur.pm10],
+      ['NO₂', h.nitrogen_dioxide && h.nitrogen_dioxide[idx]],
+      ['Ozon', h.ozone && h.ozone[idx]]
+    ].forEach(function (c) {
+      var cell = el('div', 'air-cell');
+      cell.appendChild(el('small', null, c[0] + ' (µg/m³)'));
+      cell.appendChild(el('b', null, num(c[1], 1)));
+      grid.appendChild(cell);
+    });
+    box.appendChild(grid);
+
+    if (times.length) {
+      box.appendChild(el('p', null, 'Europese AQI, komende 72 uur'));
+      var wrap = el('div', 'air-chart');
+      box.appendChild(wrap);
+      buildChart(wrap, times, h.european_aqi || [], idx);
+    }
+  }
+
+  function renderAir(lat, lon) {
+    var box = document.getElementById('air');
+    if (!box) return;
+    ensureStyle();
+    var la = Number(lat), lo = Number(lon);
+    if (!isFinite(la) || !isFinite(lo)) {
+      box.textContent = 'Ongeldige locatie.';
+      return;
+    }
+    var my = ++seq;
+    var url = API + '?latitude=' + la + '&longitude=' + lo +
+      '&current=european_aqi,pm2_5,pm10' +
+      '&hourly=european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone' +
+      '&timezone=auto&forecast_days=3';
+    box.textContent = 'Luchtkwaliteit laden…';
+    fetch(url).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function (data) {
+      if (my === seq) draw(box, data);
+    }).catch(function () {
+      if (my !== seq) return;
+      box.textContent = '';
+      box.appendChild(el('p', 'air-err', 'Luchtkwaliteit kon niet worden geladen. Probeer het later opnieuw.'));
+    });
+  }
+
+  window.renderAir = renderAir;
+})();
+
+</script>
+<script>
+/* Weatherhub radar: RainViewer overlay on Leaflet. Requires Leaflet (window.L) loaded first. */
+(function () {
+  'use strict';
+
+  var API_URL = 'https://api.rainviewer.com/public/weather-maps.json';
+  var FRAME_MS = 600;
+  var NOWCAST_WINDOW_S = 2 * 60 * 60;
+  var reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  var timeFmt = new Intl.DateTimeFormat('nl-NL', {
+    timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  });
+
+  function fmtTime(sec) {
+    return timeFmt.format(new Date(sec * 1000));
+  }
+
+  function tileUrl(host, path) {
+    return host + path + '/256/{z}/{x}/{y}/2/1_1.png';
+  }
+
+  // shortcut: nowcast frames do not say whether rain falls at lat/lon (no pixel sampling), so no rain claim is made; upgrade by reading tile colours at lat/lon
+  function nowcastText() {
+    return 'Kijk op de kaart: groen-geel-rood laat zien waar het regent';
+  }
+
+  function build(el, host, past, nowcast, lat, lon) {
+    el.innerHTML =
+      '<div class="radar-map" style="height:360px;width:100%"></div>' +
+      '<div class="radar-controls" style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">' +
+      '<button type="button" class="radar-play">Afspelen</button>' +
+      '<input type="range" class="radar-slider" aria-label="Radarmoment" min="0" max="' + (past.length - 1) +
+      '" value="' + (past.length - 1) + '" style="flex:1;min-width:120px">' +
+      '<span class="radar-time" style="min-width:90px;text-align:right"></span>' +
+      '</div>' +
+      '<p class="radar-nowcast" style="margin:8px 0 0"></p>';
+
+    var playBtn = el.querySelector('.radar-play');
+    var slider = el.querySelector('.radar-slider');
+    var timeLabel = el.querySelector('.radar-time');
+
+    var map = L.map(el.querySelector('.radar-map')).setView([lat, lon], 7);
+    L.marker([lat, lon]).addTo(map);
+
+    // Preload every past frame; only the shown one has opacity > 0.
+    var layers = past.map(function (f) {
+      return L.tileLayer(tileUrl(host, f.path), { opacity: 0, zIndex: 10 }).addTo(map);
+    });
+    L.circleMarker([lat, lon], { radius: 7, color: '#1d4ed8', fillOpacity: 0.9 }).addTo(map);
+
+    var current = 0;
+    var timer = null;
+
+    function show(i) {
+      current = i;
+      layers.forEach(function (layer, j) { layer.setOpacity(j === i ? 0.6 : 0); });
+      slider.value = i;
+      var isNow = i === past.length - 1;
+      timeLabel.textContent = isNow ? 'Nu (' + fmtTime(past[i].time) + ')' : fmtTime(past[i].time);
+    }
+
+    function stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      playBtn.textContent = 'Afspelen';
+    }
+
+    function play() {
+      if (timer) return;
+      playBtn.textContent = 'Pauze';
+      timer = setInterval(function () { show((current + 1) % past.length); }, FRAME_MS);
+    }
+
+    playBtn.addEventListener('click', function () {
+      if (timer) { stop(); } else { play(); }
+    });
+    slider.addEventListener('input', function () {
+      stop();
+      show(Number(slider.value));
+    });
+
+    el._radar = { map: map, stop: stop };
+
+    el.querySelector('.radar-nowcast').textContent = nowcastText();
+
+    if (reduceMotion) {
+      show(past.length - 1);
+    } else {
+      show(0);
+      play();
+    }
+  }
+
+  window.renderRadar = function renderRadar(lat, lon) {
+    var el = document.getElementById('radar');
+    if (!el) return Promise.resolve();
+    if (el._radar) {
+      el._radar.stop();
+      el._radar.map.remove();
+      el._radar = null;
+    }
+    lat = Number(lat);
+    lon = Number(lon);
+    el.textContent = 'Radar laden...';
+
+    return fetch(API_URL)
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        var radar = data.radar || {};
+        var past = radar.past || [];
+        if (!isFinite(lat) || !isFinite(lon)) throw new Error('ongeldige locatie');
+        if (!past.length) throw new Error('geen radarframes');
+        build(el, data.host, past, radar.nowcast || [], lat, lon);
+      })
+      .catch(function (err) {
+        console.error('Radar fout:', err);
+        el.textContent = 'Het radarbeeld kon niet worden geladen. Probeer het later opnieuw.';
+      });
+  };
+})();
+
+</script>
+<script>
+(function () {
+  var state = { lat: 52.37, lon: 4.89 };
+  var REFRESH_MS = 10 * 60 * 1000;
+
+  function renderAll() {
+    renderForecast(state.lat, state.lon);
+    renderAir(state.lat, state.lon);
+    renderRadar(state.lat, state.lon);
+    document.getElementById("coords").textContent =
+      "(" + state.lat.toFixed(2) + ", " + state.lon.toFixed(2) + ")";
+  }
+
+  function tick() {
+    try {
+      document.getElementById("clock").textContent =
+        new Date().toLocaleTimeString("nl-NL");
+    } catch (e) { /* clock is optional */ }
+  }
+
+  var btn = document.getElementById("locate");
+  var status = document.getElementById("locate-status");
+  btn.addEventListener("click", function () {
+    if (!navigator.geolocation) {
+      status.textContent = "Geolocatie niet beschikbaar";
+      return;
+    }
+    status.textContent = "Locatie ophalen...";
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      state.lat = pos.coords.latitude;
+      state.lon = pos.coords.longitude;
+      document.getElementById("city").textContent = "Mijn locatie";
+      status.textContent = "";
+      renderAll();
+    }, function () {
+      status.textContent = "Locatie geweigerd of niet beschikbaar";
+    });
+  });
+
+  tick();
+  setInterval(tick, 1000);
+  renderAll();
+  setInterval(renderAll, REFRESH_MS);
+})();
+</script>
+</body>
+</html>
