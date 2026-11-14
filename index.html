@@ -127,6 +127,10 @@ svg { width: 100%; height: auto; display: block; }
 #forecast .bar { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; min-width: 0; }
 #forecast .fill { width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; }
 #forecast .hr { font-size: .7rem; color: var(--muted); margin-top: 4px; }
+/* ?embed view: no header or location row, shorter map */
+body.embed header, body.embed .location { display: none; }
+body.embed main { padding-top: 8px; }
+body.embed #radar .radar-map { height: 260px !important; }
 @media (max-width: 560px) {
   #forecast .current { grid-template-columns: 1fr; }
   #forecast .icon { grid-row: auto; }
@@ -724,6 +728,8 @@ svg { width: 100%; height: auto; display: block; }
 </script>
 <script>
 (function () {
+  // ?embed: compact view for a Home Assistant dashboard card
+  if (location.search.indexOf('embed') !== -1) document.body.classList.add('embed');
   var state = { lat: 52.09, lon: 5.12 };
   var REFRESH_MS = 10 * 60 * 1000;
 
