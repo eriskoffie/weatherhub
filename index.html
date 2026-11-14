@@ -119,6 +119,14 @@ svg { width: 100%; height: auto; display: block; }
 /* map: dark background instead of Leaflet's default grey */
 #radar .leaflet-container { background: #0b1020; }
 #radar .radar-controls button { flex: none; }
+#forecast .wind, #forecast .uv { color: var(--muted); font-size: .75rem; margin-top: 2px; }
+#forecast .sun { color: var(--muted); font-size: .9rem; margin-top: 12px; }
+#forecast .rain-next { margin-top: 16px; }
+#forecast .rain-title { font-weight: 600; margin-bottom: 8px; }
+#forecast .bars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 110px; align-items: end; }
+#forecast .bar { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; min-width: 0; }
+#forecast .fill { width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; }
+#forecast .hr { font-size: .7rem; color: var(--muted); margin-top: 4px; }
 @media (max-width: 560px) {
   #forecast .current { grid-template-columns: 1fr; }
   #forecast .icon { grid-row: auto; }
@@ -133,7 +141,7 @@ svg { width: 100%; height: auto; display: block; }
 </header>
 
 <div class="location">
-  <p>Locatie: <strong id="city">Amsterdam</strong> <span class="muted" id="coords">(52.37, 4.89)</span></p>
+  <p>Locatie: <strong id="city">Utrecht</strong> <span class="muted" id="coords">(52.09, 5.12)</span></p>
   <button type="button" id="locate">Mijn locatie</button>
   <span class="muted" id="locate-status"></span>
 </div>
@@ -295,9 +303,32 @@ svg { width: 100%; height: auto; display: block; }
       day.appendChild(el('div', 'lo', num(d.temperature_2m_min[i], '°')));
       day.appendChild(el('div', 'rain', num(d.precipitation_sum[i], ' mm', 1)));
       day.appendChild(el('div', 'chance', num(d.precipitation_probability_max[i], '%')));
+      day.appendChild(el('div', 'wind', 'wind ' + num(d.wind_speed_10m_max[i], ' km/u')));
+      day.appendChild(el('div', 'uv', 'UV ' + num(d.uv_index_max[i])));
       row.appendChild(day);
     });
     root.appendChild(row);
+
+    // Zon: opkomst en ondergang van vandaag
+    root.appendChild(el('div', 'sun', 'Zon op ' + d.sunrise[0].slice(11, 16) + ' · onder ' + d.sunset[0].slice(11, 16)));
+
+    // Regen de komende 12 uur, per uur
+    var rainBox = el('div', 'rain-next');
+    rainBox.appendChild(el('div', 'rain-title', 'Regen komende 12 uur'));
+    var bars = el('div', 'bars');
+    for (var k = 0; k < 12 && start + k < h.time.length; k++) {
+      var idx = start + k;
+      var mm = h.precipitation[idx] || 0;
+      var col = el('div', 'bar');
+      var fill = el('div', 'fill');
+      fill.style.height = Math.min(100, 4 + mm * 40) + '%';
+      col.appendChild(fill);
+      col.appendChild(el('div', 'hr', h.time[idx].slice(11, 13)));
+      col.title = h.time[idx].slice(11, 16) + ': ' + num(mm, ' mm', 1) + ', ' + num(h.precipitation_probability[idx], '% kans');
+      bars.appendChild(col);
+    }
+    rainBox.appendChild(bars);
+    root.appendChild(rainBox);
   }
 
   window.renderForecast = function (lat, lon) {
@@ -589,7 +620,7 @@ svg { width: 100%; height: auto; display: block; }
 
   // shortcut: nowcast frames do not say whether rain falls at lat/lon (no pixel sampling), so no rain claim is made; upgrade by reading tile colours at lat/lon
   function nowcastText() {
-    return 'Kijk op de kaart: groen-geel-rood laat zien waar het regent';
+    return 'Groen-geel-rood op de kaart = regen. Geen kleur in beeld = geen regen. Zie ook "Regen komende 12 uur" bij de verwachting.';
   }
 
   function build(el, host, past, nowcast, lat, lon) {
@@ -607,7 +638,7 @@ svg { width: 100%; height: auto; display: block; }
     var slider = el.querySelector('.radar-slider');
     var timeLabel = el.querySelector('.radar-time');
 
-    var map = L.map(el.querySelector('.radar-map')).setView([lat, lon], 7);
+    var map = L.map(el.querySelector('.radar-map')).setView([lat, lon], 8);
     L.marker([lat, lon]).addTo(map);
 
     // Preload every past frame; only the shown one has opacity > 0.
@@ -693,7 +724,7 @@ svg { width: 100%; height: auto; display: block; }
 </script>
 <script>
 (function () {
-  var state = { lat: 52.37, lon: 4.89 };
+  var state = { lat: 52.09, lon: 5.12 };
   var REFRESH_MS = 10 * 60 * 1000;
 
   function renderAll() {
